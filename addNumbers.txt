@@ -1,0 +1,16 @@
+$AMJ
+1000
+Demonstracija
+$050
+iveskite du skaicius
+$070
+SUMA YRA LYGI:
+$010
+PD50
+GD60
+LR60
+AD61
+SR74
+PD70
+HALT
+$END
