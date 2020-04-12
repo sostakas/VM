@@ -19,11 +19,13 @@ var isBlockAllocatedMap map[int]bool
 var pageTableMap map[int]int
 
 func main()  {
+	var rPTR [4]byte	// page table address
+	MODE := byte('S')	// mode USER/SUPERVISOR
+	TI := 10	// timer       // its stored after $AMJ in program 
 	// virtual machine registers
 	R := make([]byte, 4)
 	C := byte('F')
 	IC := make([]byte, 2)
-
 	// allocate user memory
 	userMemory := make([]byte, BLOCKS_IN_USER_MEMORY * WORDS_IN_BLOCK * BYTES_IN_WORD)
 	// array of user memory blocks
@@ -35,8 +37,69 @@ func main()  {
 	// key = virtual memory block index, value = user memory block index
 	pageTableMap = make(map[int]int)
 
-	// move to function
 	// random allocation of user memory blocks, range 0-29
+	allocateVirtualMemory(blocksOfUserMemory, &vMemory)
+	// allocate 1 block in user memory for page table
+	allocatePageTable(blocksOfUserMemory, &rPTR)
+	// read file
+	programArray := readFile()
+	// load program to vMemory
+	loadProgramToVirtualMemory(programArray, vMemory)
+	// simple shell
+	cmd(blocksOfUserMemory, vMemory, R, C, IC, TI, MODE)
+	// cmd(blocksOfUserMemory, vMemory, R, C, IC, TI, MODE)
+
+}
+
+func cmd(blocksOfUserMemory [][]byte, vMemory [10][]byte, R []byte, C byte, IC []byte, TI int, MODE byte ) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Simple Shell")
+	fmt.Println("---------------------")
+  
+	for {
+	  fmt.Println("1.Full mode")
+	  fmt.Println("2.Step mode")
+	  fmt.Println("3.Print virtual memory")
+	  fmt.Println("4.Print user memory")
+	  fmt.Println("5.Exit")
+	  fmt.Print("-> ")
+	  text, _ := reader.ReadString('\n')
+	  text = strings.Replace(text, "\n", "", -1)
+  
+	  if strings.Compare("1", text) == 0 {
+		executeProgram(vMemory, R, &C, IC, TI, MODE, 'F')
+		fmt.Println("---------------------")
+	  }
+
+	  if strings.Compare("2", text) == 0 {
+		executeProgram(vMemory, R, &C, IC, TI, MODE, 'S')
+		fmt.Println("---------------------")
+	  }
+
+	  if strings.Compare("3", text) == 0 {
+		printvMemory(vMemory)
+		fmt.Println("---------------------")
+	  }
+
+	  if strings.Compare("4", text) == 0 {
+		  printUserMemory(blocksOfUserMemory, 29)
+	  }
+
+	  if strings.Compare("5", text) == 0 {
+		break
+	  }
+	}
+
+}
+
+func readFile() []string{
+	// read program from file to byte array
+	c, _ := ioutil.ReadFile("addNumbers.txt")
+	// make array of commands 
+	return strings.Split(string(c), "\n")
+}
+
+func allocateVirtualMemory(blocksOfUserMemory [][]byte, vMemory *[10][]byte) {
 	rand.Seed(time.Now().UnixNano())
     min := 0
     max := 29
@@ -52,126 +115,90 @@ func main()  {
 			index++
 		}
 	}
-	// ______________________
-	// move to function
-	// allocate 1 block in user memory for page table
-	index = 0
+}
+
+func allocatePageTable(blocksOfUserMemory [][]byte, rPTR *[4]byte) {
+	index := 0
+	min := 0
+    max := 29
 	for index < 30 {
-		random = rand.Intn(max - min + 1) + min
+		random := rand.Intn(max - min + 1) + min
 		if wordIsEmpty(blocksOfUserMemory[random]) && !isBlockAllocatedMap[random] {
 			isBlockAllocatedMap[random] = true
-			// fmt.Println("PAGE TABLE BLOCK INDEX: ", random)	// delete later
 			pageTableBlockArray := makeArrayOfBlocks(blocksOfUserMemory[random], 4)
 			for i := 0; i < 10; i++ {
 				for index, num := range strconv.Itoa(pageTableMap[i]) {
 					pageTableBlockArray[i][index] = byte(num)
 				}
 			}
+			// set PTR register
+			if CountDigits(random) == 1 {
+				rPTR[3] = strconv.Itoa(random)[0]
+			}
+			if CountDigits(random) == 2 {
+				rPTR[2] = strconv.Itoa(random)[0]
+				rPTR[3] = strconv.Itoa(random)[1]
+			}
 			break
 		}
 	}
-	// _______________ 
-	// move to function
-	// read program from file to byte array
-	// c, _ := ioutil.ReadFile("ha.txt")
-	c, _ := ioutil.ReadFile("addNumbers.txt")
-
-	// make array of commands 
-	programArray := strings.Split(string(c), "\n")
-	// load program to vMemory
-	loadProgramToVirtualMemory(programArray, vMemory)
-	// _______________
-	// execute program
-	// printRegisters(R, C, IC)
-
-	executeProgram(programArray, vMemory, R, &C, IC)
-	printRegisters(R, C, IC)
-	fmt.Println("PAGE TABLE: ", pageTableMap)
-	fmt.Println("VIRTUAL MEMORY:")
-	printvMemory(vMemory)
-	fmt.Println("USER MEMORY:")
-	printUserMemory(blocksOfUserMemory, 29)
 }
 
-func executeProgram(programArray []string, vMemory [10][]byte, R []byte, C *byte, IC []byte) {
-	for _, command := range programArray {
-		x, _ := strconv.Atoi(string(command[2]))
-		y, _ := strconv.Atoi(string(command[3]))
-		// fmt.Println("command is: ", command)
-
-		if command == "HALT" {
+func executeProgram(vMemory [10][]byte, R []byte, C *byte, IC []byte, TI int, MODE byte, run_mode byte) {
+	MODE = 'U'
+	endProgram := false
+	
+	for _, cmd := range vMemory {
+		vMemoryToWords := makeArrayOfBlocks(cmd, 4)
+		if endProgram == true {
 			break
 		}
+		for index, command := range vMemoryToWords {
+			if strings.Compare("HALT", string(command)) == 0 && !wordIsEmpty(command) {
+				// SI = 3 , HALT sets to 3
+				// TEST()
+				endProgram = true
+				break
+			}
+			if !wordIsEmpty(command) {
+				x, _ := strconv.Atoi(string(command[2]))
+				y, _ := strconv.Atoi(string(command[3]))
+		
+				// address check , if not legal RM_PI = 1
 
-		if len(command) == 4 {
-			switch string(command[:2]) {
-				case "LR":
-					for i := 0; i < 4; i++ {
-						R[i] = vMemory[x][4*y + i]
-					}
-				case "SR":
-					for i := 0; i < 4; i++ {
-						vMemory[x][4*y + i] = R[i]
-					}
-				case "AD":
-					a, _ := strconv.Atoi(string(R))
-					b, _ := strconv.Atoi(string(makeArrayOfBlocks(vMemory[x], 4)[y]))
-					sum := a + b
-					if CountDigits(sum) == 1 {
-						R[3] = strconv.Itoa(sum)[0]
-					}
-					if CountDigits(sum) == 2 {
-						R[2] = strconv.Itoa(sum)[0]
-						R[3] = strconv.Itoa(sum)[1]
-					}
-					if CountDigits(sum) == 3 {
-						R[1] = strconv.Itoa(sum)[0]
-						R[2] = strconv.Itoa(sum)[1]
-						R[3] = strconv.Itoa(sum)[2]
-					}
-					if CountDigits(sum) == 4 {
-						R[0] = strconv.Itoa(sum)[0]
-						R[1] = strconv.Itoa(sum)[1]
-						R[2] = strconv.Itoa(sum)[2]
-						R[3] = strconv.Itoa(sum)[3]
-					}
-
-				case "CR":
-					if string(makeArrayOfBlocks(vMemory[x], 4)[y]) == string(R) {
-						*C = 'T'
-					} else {
-						*C = 'F'
-					}
-				case "BT":
-					// does it assigns 0:2 or 2:4?
-					if *C == 'T' {
-						for i := 0; i < 2; i++ {
-							IC[i] = vMemory[x][4*y + i + 2]
+				if len(command) == 4 {
+					if run_mode == 'S' {
+						fmt.Println("COMMAND IS: ", string(command))
+						for  {
+							fmt.Println("NEXT COMMAND: ", string(vMemoryToWords[index+1]))
+							fmt.Println("1.next")
+							fmt.Println("2.registers")
+							fmt.Println("3.vMemory")
+							fmt.Print("-> ")
+							reader := bufio.NewReader(os.Stdin)
+							text, _ := reader.ReadString('\n')
+							text = strings.Replace(text, "\n", "", -1)
+							if strings.Compare("1", text) == 0 {
+								execCommand(string(command), R, vMemory, x, y, IC, *C)
+								break
+							} 
+							if strings.Compare("2", text) == 0 {
+								printRegisters(R, *C, IC)
+								fmt.Println("---------------------")
+							} 
+							if strings.Compare("3", text) == 0 {
+								// should be vMemory of running command
+								printvMemory(vMemory)
+								fmt.Println("---------------------")
+							} 
 						}
 					}
-				case "GD":
-					reader := bufio.NewReader(os.Stdin)
-					fmt.Print("Waiting for input: ")
-					text, _ := reader.ReadString('\n')
-					for index, value := range text {
-						if index == len(text) - 1 {
-							break
-						}
-						vMemory[x][index] = byte(value)
+			
+					if run_mode == 'F' {
+						execCommand(string(command), R, vMemory, x, y, IC, *C)
 					}
-				case "PD":
-					fmt.Println(string(vMemory[x][0:10*4]))
-				case "NT":
-					// is it correct?
-					if *C != 'T' {
-						IC[0] = strconv.Itoa(x)[0]
-						IC[1] = strconv.Itoa(y)[0]
-					}
-				case "GO":
-					// is it correct?
-					IC[0] = strconv.Itoa(x)[0]
-					IC[1] = strconv.Itoa(y)[0]
-			} 
+				}
+			}
 		}
 	}
 }
@@ -212,11 +239,10 @@ func loadProgramToVirtualMemory(program []string, vMemory [10][]byte) {
 }
 func printUserMemory(blocksOfUserMemory [][]byte, blocksNumber int) {
 	for i := 0; i < blocksNumber; i++ {
-		// fmt.Println("i: ",i, " ,,", blocksOfUserMemory[i])
-		// fmt.Println("i: ",i, " ,,", string(blocksOfUserMemory[i]))
+		// fmt.Println("block number: : ",i, " ,,", blocksOfUserMemory[i])
+		// fmt.Println("block number: : ",i, " ,,", string(blocksOfUserMemory[i]))
 		if !wordIsEmpty(blocksOfUserMemory[i]) {
 			fmt.Println("block number: ",i, " ,,", string(blocksOfUserMemory[i]))
-
 		}		
 	}
 }
@@ -249,7 +275,7 @@ func printRegisters(R []byte, C byte, IC []byte) {
 	// fmt.Println("IC: ", IC)
 	fmt.Println("R: ", string(R))
 	fmt.Println("C: ", string(C))
-	// fmt.Println("IC: ", string(IC))
+	fmt.Println("IC: ", string(IC))
 }
 
 func printvMemory(vMemory [10][]byte) {
@@ -260,7 +286,7 @@ func printvMemory(vMemory [10][]byte) {
 	// }
 	for i := 0; i < 10; i++ {
 		if !wordIsEmpty(vMemory[i]) {
-			fmt.Println("i: ",i, " ,,", string(vMemory[i]))
+			fmt.Println("block number: ",i, " ,,", string(vMemory[i]))
 		}
 	}
 }
@@ -272,4 +298,110 @@ func CountDigits(i int) (count int) {
 		count = count + 1
 	}
 	return count
+}
+
+func channelDevice() {
+	// SB := make([]byte, 4)
+	// DB := make([]byte, 4)
+	// ST := 0
+	// DT := 0
+}
+
+
+func test() {
+	// if (PI+SI) > 0 || TI == 0 {
+	// 	MODE = 'S'
+	// 	interruptHandling()
+	// 	MODE = 'U'
+	// }
+}
+
+func interruptHandling() {
+	// implement
+}
+
+func execCommand(command string, R []byte, vMemory [10][]byte, x int, y int, IC []byte, C byte) {
+	// R []byte, C byte, IC []byte, vMemory [10][]byte
+	// fmt.Println("C: ", C)
+	if len(command) == 4 {
+		// fmt.Println("CURRENT COMMAND: ", command)
+		switch string(command[:2]) {
+			case "LR":
+				for i := 0; i < 4; i++ {
+					R[i] = vMemory[x][4*y + i]
+				}
+			case "SR":
+				for i := 0; i < 4; i++ {
+					vMemory[x][4*y + i] = R[i]
+				}
+			case "AD":
+				a, _ := strconv.Atoi(string(R))
+				b, _ := strconv.Atoi(string(makeArrayOfBlocks(vMemory[x], 4)[y]))
+				sum := a + b
+				if CountDigits(sum) == 1 {
+					R[3] = strconv.Itoa(sum)[0]
+				}
+				if CountDigits(sum) == 2 {
+					R[2] = strconv.Itoa(sum)[0]
+					R[3] = strconv.Itoa(sum)[1]
+				}
+				if CountDigits(sum) == 3 {
+					R[1] = strconv.Itoa(sum)[0]
+					R[2] = strconv.Itoa(sum)[1]
+					R[3] = strconv.Itoa(sum)[2]
+				}
+				if CountDigits(sum) == 4 {
+					R[0] = strconv.Itoa(sum)[0]
+					R[1] = strconv.Itoa(sum)[1]
+					R[2] = strconv.Itoa(sum)[2]
+					R[3] = strconv.Itoa(sum)[3]
+				}
+
+			case "CR":
+				if string(makeArrayOfBlocks(vMemory[x], 4)[y]) == string(R) {
+					C = 'T'
+				} else {
+					C = 'F'
+				}
+			case "BT":
+				// does it assigns 0:2 or 2:4?
+				if C == 'T' {
+					for i := 0; i < 2; i++ {
+						IC[i] = vMemory[x][4*y + i + 2]
+					}
+				}
+			case "GD":
+				reader := bufio.NewReader(os.Stdin)
+				fmt.Print("Enter text: ")
+				text, _ := reader.ReadString('\n')
+				for index, value := range text {
+					if index == len(text) - 1 {
+						break
+					}
+					vMemory[x][index] = byte(value)
+				}
+				// RM_SI = 1 ?
+				// RM_TI -= 2 ?
+			case "PD":
+				fmt.Println(string(vMemory[x][0:10*4]))
+				// RM_SI = 1 ? 
+				// RM_TI -= 2 ? 
+			case "NT":
+				// is it correct?
+				if C != 'T' {
+					IC[0] = strconv.Itoa(x)[0]
+					IC[1] = strconv.Itoa(y)[0]
+				}
+			case "GO":
+				// is it correct?
+				IC[0] = strconv.Itoa(x)[0]
+				IC[1] = strconv.Itoa(y)[0]
+			default:
+				// RM_PI = 2 command code invalid
+		} 
+	}
+	// RM_TI--
+	// RM_TEST()
+	// IC++
+	// if run_mode = 'S', next = false
 }
