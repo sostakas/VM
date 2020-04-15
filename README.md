@@ -1,7 +1,7 @@
 # VM
 ## Task 2 for OS 
 
-* **How to run**
+**How to run**
 * git clone 
 * cd VM/src
 * ./src or go run main.go
